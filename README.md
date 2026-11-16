@@ -53,7 +53,7 @@ Replace `OWNER/REPOSITORY` with the GitHub account and repository name:
 
 ```sh
 git clone https://github.com/mitesh191/automated-mp-posting-system.git
-cd REPOSITORY
+cd automated-mp-posting-system
 ```
 
 Run the remaining commands from this project directory.

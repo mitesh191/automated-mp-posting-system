@@ -100,19 +100,16 @@ have `public_access: false`. Accordingly, `posted_url` is `null` whenever
 Telegram does not return a public username for the destination.
 
 For Slack, create an incoming webhook for the destination channel and set
-`SLACK_WEBHOOK_URL` to its URL. Keep the URL secret. Incoming webhooks are
-bound to a Slack workspace channel and return only an acknowledgement, not a
-message permalink. Slack results therefore use `posted_url: null` and
+`SLACK_WEBHOOK_URL` to its URL. Incoming webhooks are bound to a Slack
+workspace channel and return only an acknowledgement, not a message permalink.
+Slack results therefore use `posted_url: null` and
 `public_access: false`.
 
 For Discord, set `DISCORD_WEBHOOK_URL` to an incoming webhook for the
-destination channel. Keep the URL secret. Although Discord can return message
-details when the webhook URL includes `?wait=true`, the integration currently
-does not use those details to build a permalink. Discord results therefore use
+destination channel. Although Discord can return message details when the
+webhook URL includes `?wait=true`, the integration currently does not use
+those details to build a permalink. Discord results therefore use
 `posted_url: null` and `public_access: false`.
-
-Never commit `.env` or paste credentials into source files. Commit
-`.env.example` instead; it contains placeholders, not secrets.
 
 ## Build and run with Docker
 
@@ -161,10 +158,6 @@ does not delete your source files or `.env`.
 ## API reference
 
 Base URL: `http://localhost:4000`
-
-The service does not require client authentication. Provider credentials are
-configured server-side in `.env`; do not expose this service to an untrusted
-network without adding authentication and transport security.
 
 ### `POST /posting`
 
@@ -280,7 +273,7 @@ Telegram, Slack, Discord.
 | `results[].public_access` | boolean or `null` | Public accessibility when known; `null` means it could not be determined. |
 | `results[].date` | string or `null` | Successful provider acknowledgment date in `YYYY-MM-DD` format, IST (UTC+05:30). |
 | `results[].time` | string or `null` | Successful provider acknowledgment time in `HH:MM:SS` format, IST (UTC+05:30). |
-| `results[].error` | string or `null` | Non-secret failure reason; `null` on success. |
+| `results[].error` | string or `null` | Failure reason; `null` on success. |
 
 `posted_url` may be `null` even when `status` is `success`: Slack webhooks do
 not return a message permalink, Discord message details are not currently used

@@ -26,17 +26,38 @@ def create_app(
     app = FastAPI(
         title="Automated Multi-Platform Posting API",
         version="1.0.0",
-        description="Publishes a validated message to configured social platforms.",
+        description=(
+            "Publishes one validated message to the configured Mastodon, Bluesky, "
+            "Telegram, Slack, and Discord integrations. Provider failures are "
+            "reported per platform; they do not fail the HTTP request."
+        ),
         lifespan=lifespan,
     )
     app.state.settings = app_settings
 
-    @app.post("/posting", response_model=PostingResponse)
+    @app.post(
+        "/posting",
+        response_model=PostingResponse,
+        summary="Publish a message to configured platforms",
+        description=(
+            "Accepts a message of 1-200 characters containing exactly one valid "
+            "HTTP(S) URL. The service attempts all five providers independently. "
+            "Provider-level failures are included in the 200 response; HTTP 422 "
+            "indicates invalid request data."
+        ),
+        responses={
+            500: {"description": "Unexpected server error prevented request handling."}
+        },
+    )
     async def create_post(payload: PostingRequest, request: Request) -> PostingResponse:
         service = PostingService(request.app.state.settings)
         return await service.post_all(payload.message, request.app.state.http_client)
 
-    @app.get("/health")
+    @app.get(
+        "/health",
+        summary="Check API health",
+        description="Returns whether the API process is responding; does not test providers.",
+    )
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 

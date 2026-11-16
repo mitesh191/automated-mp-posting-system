@@ -6,10 +6,10 @@ import httpx
 from app.config import Settings
 from app.platforms.base import IntegrationError, Publisher, failed_result
 from app.platforms.bluesky import BlueskyPublisher
-from app.platforms.linkedin import LinkedInPublisher
+from app.platforms.discord import DiscordPublisher
 from app.platforms.mastodon import MastodonPublisher
-from app.platforms.reddit import RedditPublisher
-from app.platforms.x import XPublisher
+from app.platforms.slack import SlackPublisher
+from app.platforms.telegram import TelegramPublisher
 from app.schemas import PlatformResult, PostingResponse
 
 logger = logging.getLogger(__name__)
@@ -20,9 +20,9 @@ class PostingService:
         self.publishers: list[Publisher] = [
             MastodonPublisher(settings),
             BlueskyPublisher(settings),
-            LinkedInPublisher(settings),
-            XPublisher(settings),
-            RedditPublisher(settings),
+            TelegramPublisher(settings),
+            SlackPublisher(settings),
+            DiscordPublisher(settings),
         ]
 
     async def post_all(

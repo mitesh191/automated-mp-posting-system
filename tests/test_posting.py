@@ -1,6 +1,11 @@
+import json
+from datetime import UTC
+from datetime import datetime as DateTime
+
 import httpx
 import pytest
 
+import app.platforms.base as platform_base
 from app.config import Settings
 from app.main import create_app
 
@@ -11,12 +16,35 @@ def configured_settings() -> Settings:
         mastodon_access_token="mastodon-token",
         bluesky_handle="poster.example",
         bluesky_app_password="bluesky-password",
-        linkedin_access_token="linkedin-token",
-        linkedin_author_urn="urn:li:person:123",
-        x_user_access_token="x-token",
-        reddit_access_token="reddit-token",
-        reddit_subreddit="test",
+        telegram_bot_token="telegram-token",
+        telegram_chat_id="@testchannel",
+        slack_webhook_url=(
+            "https://hooks.slack.com/services/T00000000/B00000000/test-secret"
+        ),
+        discord_webhook_url=(
+            "https://discord.com/api/webhooks/123456789012345678/fakeWebhookToken"
+            "?wait=true"
+        ),
     )
+
+
+def test_successful_post_timestamps_use_india_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_utc = DateTime(2026, 11, 16, 20, 30, tzinfo=UTC)
+
+    class FrozenDateTime:
+        @staticmethod
+        def now(tz: object) -> DateTime:
+            return fixed_utc
+
+    monkeypatch.setattr(platform_base, "datetime", FrozenDateTime)
+    result = platform_base.successful_result(
+        "Test", platform_base.PublishedPost(url=None)
+    )
+
+    assert result.date == "2026-11-17"
+    assert result.time == "02:00:00"
 
 
 @pytest.mark.asyncio
@@ -65,21 +93,26 @@ async def test_each_platform_is_attempted_when_some_fail() -> None:
             return httpx.Response(
                 200, json={"uri": "at://did:plc:a/app.bsky.feed.post/post1"}
             )
-        if request.url.host == "api.linkedin.com":
-            return httpx.Response(
-                201, headers={"x-restli-id": "urn:li:share:123"}, json={}
+        if request.url.host == "api.telegram.org":
+            return httpx.Response(403, json={"ok": False})
+        if request.url.host == "hooks.slack.com":
+            assert request.url.path == "/services/T00000000/B00000000/test-secret"
+            assert json.loads(request.content) == {
+                "text": "Try this https://example.com today"
+            }
+            return httpx.Response(200, text="ok")
+        if request.url.host == "discord.com":
+            assert request.url.path == (
+                "/api/webhooks/123456789012345678/fakeWebhookToken"
             )
-        if request.url.host == "api.x.com":
-            return httpx.Response(403, json={"detail": "forbidden"})
-        return httpx.Response(
-            200,
-            json={
-                "json": {
-                    "errors": [],
-                    "data": {"url": "/r/test/comments/abc/quick_update/"},
-                }
-            },
-        )
+            assert request.url.query == b"wait=true"
+            assert json.loads(request.content) == {
+                "content": "Try this https://example.com today"
+            }
+            return httpx.Response(
+                200, json={"id": "123456789012345679", "channel_id": "1234"}
+            )
+        raise AssertionError(f"unexpected request host: {request.url.host}")
 
     app = create_app(
         settings=configured_settings(),
@@ -101,21 +134,25 @@ async def test_each_platform_is_attempted_when_some_fail() -> None:
     assert [result["status"] for result in body["results"]] == [
         "success",
         "success",
-        "success",
         "failed",
         "success",
+        "success",
     ]
-    assert body["results"][3]["error"] == "provider returned HTTP 403"
-    assert "api.linkedin.com" in requested_hosts
-    assert "oauth.reddit.com" in requested_hosts
+    assert body["results"][2]["error"] == "provider returned HTTP 403"
+    assert "mastodon.example" in requested_hosts
+    assert "bsky.social" in requested_hosts
+    assert "api.telegram.org" in requested_hosts
+    assert "hooks.slack.com" in requested_hosts
+    assert "discord.com" in requested_hosts
     assert body["results"][1]["posted_url"].endswith("/post/post1")
-    assert body["results"][4]["posted_url"].startswith("https://www.reddit.com/")
+    assert body["results"][3]["posted_url"] is None
+    assert body["results"][4]["posted_url"] is None
     assert [result["public_access"] for result in body["results"]] == [
         None,
         None,
-        None,
         False,
-        None,
+        False,
+        False,
     ]
 
 
@@ -141,6 +178,131 @@ async def test_unconfigured_platforms_return_failures_without_api_calls() -> Non
 
 
 @pytest.mark.asyncio
+async def test_telegram_rejects_invalid_chat_id_without_request() -> None:
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        return httpx.Response(500)
+
+    app = create_app(
+        settings=Settings(
+            telegram_bot_token="telegram-token",
+            telegram_chat_id="private-chat-id",
+        ),
+        http_transport=httpx.MockTransport(handler),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        response = await client.post(
+            "/posting", json={"message": "Test https://example.com"}
+        )
+
+    telegram_result = response.json()["results"][2]
+    assert telegram_result["status"] == "failed"
+    assert telegram_result["error"] == "chat ID must be numeric or a public @username"
+    assert requested_hosts == []
+
+
+@pytest.mark.asyncio
+async def test_telegram_numeric_chat_id_can_succeed_without_public_url() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.telegram.org"
+        assert json.loads(request.content) == {
+            "chat_id": "7942595830",
+            "text": "Test https://example.com",
+        }
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": 46,
+                    "chat": {"id": 7942595830, "type": "private"},
+                },
+            },
+        )
+
+    app = create_app(
+        settings=Settings(
+            telegram_bot_token="telegram-token",
+            telegram_chat_id="7942595830",
+        ),
+        http_transport=httpx.MockTransport(handler),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        response = await client.post(
+            "/posting", json={"message": "Test https://example.com"}
+        )
+
+    result = response.json()["results"][2]
+    assert result["status"] == "success"
+    assert result["posted_url"] is None
+    assert result["public_access"] is False
+
+
+@pytest.mark.asyncio
+async def test_slack_rejects_non_slack_webhook_without_request() -> None:
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        return httpx.Response(500)
+
+    app = create_app(
+        settings=Settings(slack_webhook_url="https://example.com/webhook"),
+        http_transport=httpx.MockTransport(handler),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        response = await client.post(
+            "/posting", json={"message": "Test https://example.com"}
+        )
+
+    slack_result = response.json()["results"][3]
+    assert slack_result["status"] == "failed"
+    assert slack_result["error"] == "webhook URL must be a valid Slack incoming webhook"
+    assert requested_hosts == []
+
+
+@pytest.mark.asyncio
+async def test_discord_rejects_non_discord_webhook_without_request() -> None:
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        return httpx.Response(500)
+
+    app = create_app(
+        settings=Settings(discord_webhook_url="https://example.com/webhook"),
+        http_transport=httpx.MockTransport(handler),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        response = await client.post(
+            "/posting", json={"message": "Test https://example.com"}
+        )
+
+    discord_result = response.json()["results"][4]
+    assert discord_result["status"] == "failed"
+    assert discord_result["error"] == "webhook URL must be a valid Discord webhook"
+    assert requested_hosts == []
+
+
+@pytest.mark.asyncio
 async def test_unexpected_provider_error_does_not_stop_other_platforms() -> None:
     requested_hosts: list[str] = []
 
@@ -156,21 +318,25 @@ async def test_unexpected_provider_error_does_not_stop_other_platforms() -> None
             return httpx.Response(
                 200, json={"uri": "at://did:plc:a/app.bsky.feed.post/post1"}
             )
-        if request.url.host == "api.linkedin.com":
+        if request.url.host == "api.telegram.org":
             return httpx.Response(
-                201, headers={"x-restli-id": "urn:li:share:123"}, content=b""
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "message_id": 45,
+                        "chat": {
+                            "type": "channel",
+                            "username": "testchannel",
+                        },
+                    },
+                },
             )
-        if request.url.host == "api.x.com":
-            return httpx.Response(200, json={"data": {"id": "123"}})
-        return httpx.Response(
-            200,
-            json={
-                "json": {
-                    "errors": [],
-                    "data": {"url": "/r/test/comments/abc/quick_update/"},
-                }
-            },
-        )
+        if request.url.host == "hooks.slack.com":
+            return httpx.Response(200, text="ok")
+        if request.url.host == "discord.com":
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected request host: {request.url.host}")
 
     app = create_app(
         settings=configured_settings(),
@@ -196,8 +362,11 @@ async def test_unexpected_provider_error_does_not_stop_other_platforms() -> None
         "success",
     ]
     assert results[0]["error"] == "unexpected integration error (RuntimeError)"
-    assert "api.linkedin.com" in requested_hosts
-    assert "oauth.reddit.com" in requested_hosts
+    assert "mastodon.example" in requested_hosts
+    assert "bsky.social" in requested_hosts
+    assert "api.telegram.org" in requested_hosts
+    assert "hooks.slack.com" in requested_hosts
+    assert "discord.com" in requested_hosts
 
 
 @pytest.mark.asyncio
@@ -228,30 +397,3 @@ async def test_mastodon_rejects_non_https_instance_before_sending_token() -> Non
     assert mastodon_result["status"] == "failed"
     assert mastodon_result["error"] == "instance URL must be a valid HTTPS origin"
     assert requested_hosts == []
-
-
-@pytest.mark.asyncio
-async def test_empty_linkedin_error_response_preserves_http_status() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == "api.linkedin.com"
-        return httpx.Response(403, content=b"")
-
-    app = create_app(
-        settings=Settings(
-            linkedin_access_token="linkedin-token",
-            linkedin_author_urn="urn:li:person:123",
-        ),
-        http_transport=httpx.MockTransport(handler),
-    )
-    transport = httpx.ASGITransport(app=app)
-    async with (
-        app.router.lifespan_context(app),
-        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
-    ):
-        response = await client.post(
-            "/posting", json={"message": "Try https://example.com"}
-        )
-
-    linkedin_result = response.json()["results"][2]
-    assert linkedin_result["status"] == "failed"
-    assert linkedin_result["error"] == "provider returned HTTP 403"

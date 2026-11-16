@@ -36,7 +36,17 @@ def extract_cta_url(message: str) -> str:
 
 
 class PostingRequest(BaseModel):
-    message: Annotated[str, Field(min_length=1, max_length=200)]
+    message: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=200,
+            description=(
+                "Text to publish. Must contain exactly one valid HTTP or HTTPS URL."
+            ),
+            examples=["Check out our latest business platform: https://example.com"],
+        ),
+    ]
 
     @field_validator("message")
     @classmethod
@@ -46,15 +56,34 @@ class PostingRequest(BaseModel):
 
 
 class PlatformResult(BaseModel):
-    platform: str
-    status: Literal["success", "failed"]
-    posted_url: str | None
-    public_access: bool | None
-    date: str | None
-    time: str | None
-    error: str | None
+    platform: str = Field(description="Name of the publishing platform.")
+    status: Literal["success", "failed"] = Field(
+        description="Whether this platform accepted the post."
+    )
+    posted_url: str | None = Field(
+        description="Public URL of the created post, or null when unavailable."
+    )
+    public_access: bool | None = Field(
+        description=(
+            "Whether the post is publicly accessible; null when the integration "
+            "cannot determine visibility."
+        )
+    )
+    date: str | None = Field(
+        description="Provider acknowledgement date in YYYY-MM-DD format (IST)."
+    )
+    time: str | None = Field(
+        description="Provider acknowledgement time in HH:MM:SS format (IST)."
+    )
+    error: str | None = Field(
+        description="Non-secret failure reason, or null when status is success."
+    )
 
 
 class PostingResponse(BaseModel):
-    success: bool
-    results: list[PlatformResult]
+    success: bool = Field(
+        description="True if at least one platform successfully accepted the post."
+    )
+    results: list[PlatformResult] = Field(
+        description="One independent result for each configured platform integration."
+    )

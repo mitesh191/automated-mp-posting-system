@@ -1,10 +1,12 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Protocol
 
 import httpx
 
 from app.schemas import PlatformResult
+
+INDIA_TIMEZONE = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 
 class IntegrationError(Exception):
@@ -21,12 +23,12 @@ class Publisher(Protocol):
 
 @dataclass(frozen=True)
 class PublishedPost:
-    url: str
+    url: str | None
     public_access: bool | None = None
 
 
 def successful_result(platform: str, post: PublishedPost) -> PlatformResult:
-    published_at = datetime.now(UTC)
+    published_at = datetime.now(UTC).astimezone(INDIA_TIMEZONE)
     return PlatformResult(
         platform=platform,
         status="success",
